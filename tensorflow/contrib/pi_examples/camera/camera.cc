@@ -28,6 +28,9 @@ limitations under the License.
 #include <sys/time.h>
 #include <sys/mman.h>
 #include <vector>
+#include <mutex>
+#include <thread>
+#include <chrono>
 
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -192,7 +195,7 @@ Status EndCameraCapture(int camera_handle, CameraBuffer* buffers,
 
 Status CaptureNextFrame(int camera_handle, CameraBuffer* buffers,
                         uint8_t** frame_data, int* frame_data_size,
-                        v4l2_buffer* buf) {
+                        v4l2_buffer* buf, int buffer_index) {
   int r;
   do {
     fd_set fds;
@@ -212,6 +215,7 @@ Status CaptureNextFrame(int camera_handle, CameraBuffer* buffers,
   memset(buf, 0, sizeof(*buf));
   buf->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
   buf->memory = V4L2_MEMORY_MMAP;
+  buf->index = buffer_index;
   Status get_buffer_status =
       SendCameraCommand(camera_handle, VIDIOC_DQBUF, buf);
   if (!get_buffer_status.ok()) {
@@ -395,6 +399,93 @@ Status TensorFromFrame(uint8_t* image_data, int image_width, int image_height,
   return Status::OK();
 }
 
+class CameraShooter {
+  int camera_handle;
+  static const int how_many_buffers = 2;
+  CameraBuffer* buffers;
+  Status buffer_status[how_many_buffers];
+  v4l2_buffer buf[how_many_buffers];
+  int buffer_index;
+    
+public:
+  CameraShooter() {    
+    for(int i = 0; i < how_many_buffers; i++)
+      buffer_status[i] = tensorflow::errors::Unknown("Not initialized");
+  }
+  
+  int Open(int video_width, int video_height) {
+    Status open_status = OpenCamera(&camera_handle);
+    if (!open_status.ok()) {
+      LOG(ERROR) << "OpenCamera failed with " << open_status;
+      return -1;
+    }
+
+    Status format_status =
+      SetCameraFormat(camera_handle, video_width, video_height);
+    if (!format_status.ok()) {
+      LOG(ERROR) << "SetCameraFormat failed with " << format_status;
+      return -1;
+    }
+
+    Status start_capture_status =
+      StartCameraCapture(camera_handle, how_many_buffers, &buffers);
+    if (!start_capture_status.ok()) {
+      LOG(ERROR) << "StartCameraCapture failed with " << start_capture_status;
+      return -1;
+    }
+  }
+    
+  Status CaptureFrame(uint8_t** frame_data, int* frame_data_size) {
+    buffer_index = buffer_index % how_many_buffers;
+    if (buffer_status[buffer_index].ok()) {
+      Status release_frame_status = ReleaseFrame(camera_handle, &buf[buffer_index]);
+      if (!release_frame_status.ok()) {
+        LOG(ERROR) << "ReleaseFrame failed with " << release_frame_status;
+        return release_frame_status;
+      }
+    }
+    Status capture_next_status = CaptureNextFrame(
+      camera_handle, buffers, frame_data, frame_data_size,
+      &buf[buffer_index], buffer_index
+    );
+    buffer_status[buffer_index] = capture_next_status;
+    if (!capture_next_status.ok()) {
+      LOG(ERROR) << "CaptureNextFrame failed with " << capture_next_status;
+      return capture_next_status;
+    }
+    return Status::OK();
+  }
+
+  int Close() {
+    for(int i = 0; i < how_many_buffers; ++i) {
+      if (buffer_status[i].ok()) {
+        Status release_frame_status = ReleaseFrame(camera_handle, &buf[i]);
+        if (!release_frame_status.ok()) {
+          LOG(ERROR) << "ReleaseFrame failed with " << release_frame_status;
+          return -1;
+        }
+      }
+    }
+
+    Status end_capture_status =
+      EndCameraCapture(camera_handle, buffers, how_many_buffers);
+    if (!end_capture_status.ok()) {
+      LOG(ERROR) << "EndCameraCapture failed with " << end_capture_status;
+      return -1;
+    }
+
+    Status close_status = CloseCamera(camera_handle);
+    if (!close_status.ok()) {
+      LOG(ERROR) << "CloseCamera failed with " << close_status;
+      return -1;
+    }
+  }
+  
+  ~CameraShooter() {
+    Close();
+  }
+};
+
 int main(int argc, char** argv) {
   string graph =
       "tensorflow/contrib/pi_examples/label_image/data/"
@@ -453,55 +544,44 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-  int camera_handle;
-  Status open_status = OpenCamera(&camera_handle);
-  if (!open_status.ok()) {
-    LOG(ERROR) << "OpenCamera failed with " << open_status;
+  CameraShooter shooter;
+  shooter.Open(video_width, video_height);
+
+  uint8_t* frame_data;
+  int frame_data_size;
+  std::mutex frame_mutex;
+  Status capture_next_status = shooter.CaptureFrame(&frame_data, &frame_data_size);
+  if (!capture_next_status.ok()) {
+    LOG(ERROR) << "CaptureNextFrame failed with " << capture_next_status;
     return -1;
   }
 
-  Status format_status =
-      SetCameraFormat(camera_handle, video_width, video_height);
-  if (!format_status.ok()) {
-    LOG(ERROR) << "SetCameraFormat failed with " << format_status;
-    return -1;
-  }
-
-  const int how_many_buffers = 2;
-  CameraBuffer* buffers;
-  Status start_capture_status =
-      StartCameraCapture(camera_handle, how_many_buffers, &buffers);
-  if (!start_capture_status.ok()) {
-    LOG(ERROR) << "StartCameraCapture failed with " << start_capture_status;
-    return -1;
-  }
-
+  std::thread producer([&]() {
+      for (int i = 0; i < 20000; i++) {
+        std::lock_guard<std::mutex> lock(frame_mutex);
+        Status capture_next_status = shooter.CaptureFrame(&frame_data, &frame_data_size);
+        if (!capture_next_status.ok()) {
+          LOG(ERROR) << "CaptureNextFrame failed with " << capture_next_status;
+        }
+        if (i % 100 == 0) LOG(INFO) << "Frame #" << i;
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+      }
+    });
+  
   for (int i = 0; i < 200; i++) {
-    uint8_t* frame_data;
-    int frame_data_size;
-    v4l2_buffer buf;
-    Status capture_next_status = CaptureNextFrame(
-        camera_handle, buffers, &frame_data, &frame_data_size, &buf);
-    if (!capture_next_status.ok()) {
-      LOG(ERROR) << "CaptureNextFrame failed with " << capture_next_status;
-      return -1;
-    }
-
     std::vector<Tensor> resized_tensors;
-    Status tensor_from_frame_status =
+    {
+      std::lock_guard<std::mutex> lock(frame_mutex);
+
+      Status tensor_from_frame_status =
         TensorFromFrame(frame_data, video_width, video_height, 3, input_height,
                         input_width, input_mean, input_std, &resized_tensors);
-    if (!tensor_from_frame_status.ok()) {
-      LOG(ERROR) << tensor_from_frame_status;
-      return -1;
+      if (!tensor_from_frame_status.ok()) {
+        LOG(ERROR) << tensor_from_frame_status;
+        return -1;
+      }
     }
     const Tensor& resized_tensor = resized_tensors[0];
-
-    Status release_frame_status = ReleaseFrame(camera_handle, &buf);
-    if (!release_frame_status.ok()) {
-      LOG(ERROR) << "ReleaseFrame failed with " << release_frame_status;
-      return -1;
-    }
 
     // Actually run the image through the model.
     std::vector<Tensor> outputs;
@@ -521,18 +601,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  Status end_capture_status =
-      EndCameraCapture(camera_handle, buffers, how_many_buffers);
-  if (!end_capture_status.ok()) {
-    LOG(ERROR) << "EndCameraCapture failed with " << end_capture_status;
-    return -1;
-  }
-
-  Status close_status = CloseCamera(camera_handle);
-  if (!close_status.ok()) {
-    LOG(ERROR) << "CloseCamera failed with " << open_status;
-    return -1;
-  }
-
+  producer.join();
+  
   return 0;
 }
