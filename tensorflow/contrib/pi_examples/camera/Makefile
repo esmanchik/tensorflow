@@ -46,6 +46,7 @@ LIBS := \
 -lstdc++ \
 -lprotobuf \
 -lv4l2 \
+-lflite_cmu_us_kal -lflite_usenglish -lflite_cmulex -lflite -lm -lasound \
 -Wl,--allow-multiple-definition \
 -Wl,--whole-archive \
 -ltensorflow-core \

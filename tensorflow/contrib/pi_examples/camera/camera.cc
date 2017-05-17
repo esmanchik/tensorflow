@@ -47,6 +47,8 @@ limitations under the License.
 #include "tensorflow/core/public/session.h"
 #include "tensorflow/core/util/command_line_flags.h"
 
+#include "flite/flite.h"
+
 // These are all common classes it's handy to reference with no namespace.
 using tensorflow::Flag;
 using tensorflow::Tensor;
@@ -307,6 +309,10 @@ Status ReadLabelsFile(string file_name, std::vector<string>* result,
   return Status::OK();
 }
 
+extern "C" cst_voice *register_cmu_us_kal(const char *voxdir);
+
+cst_voice *v;
+
 // Given the output of a model run, and the name of a file containing the labels
 // this prints out the top five highest-scoring values.
 Status PrintTopLabels(const std::vector<Tensor>& outputs,
@@ -322,6 +328,12 @@ Status PrintTopLabels(const std::vector<Tensor>& outputs,
     const int label_index = indices_flat(pos);
     const float score = scores_flat(pos);
     LOG(INFO) << labels[label_index] << " (" << label_index << "): " << score;
+    //
+    std::stringstream ss;
+    std::string tts;
+    ss << labels[label_index] << " " << score;
+    tts = ss.str();
+    flite_text_to_speech(tts.c_str(),v,"play");
     // Print the top label to stdout if it's above a threshold.
     if ((pos == 0) && (score > print_threshold)) {
       std::cout << labels[label_index] << std::endl;
@@ -543,7 +555,7 @@ int main(int argc, char** argv) {
     LOG(ERROR) << read_labels_status;
     return -1;
   }
-
+  
   CameraShooter shooter;
   shooter.Open(video_width, video_height);
 
@@ -567,6 +579,12 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::milliseconds(40));
       }
     });
+
+  flite_init();
+
+  v = register_cmu_us_kal(NULL);
+
+  //flite_file_to_speech(argv[1],v,"play");
   
   for (int i = 0; i < 200; i++) {
     std::vector<Tensor> resized_tensors;
