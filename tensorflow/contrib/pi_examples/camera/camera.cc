@@ -331,7 +331,8 @@ Status PrintTopLabels(const std::vector<Tensor>& outputs,
     //
     std::stringstream ss;
     std::string tts;
-    ss << labels[label_index] << " " << score;
+    int score_percentage = score * 100;
+    ss << labels[label_index] << " " << score_percentage;
     tts = ss.str();
     flite_text_to_speech(tts.c_str(),v,"play");
     // Print the top label to stdout if it's above a threshold.
