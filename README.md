@@ -4,8 +4,11 @@ This fork is for my personal projects with **TensorFlow**
 ## Launch
 ```
 sudo docker run -v `pwd`:/root/tf -it gcr.io/tensorflow/tensorflow:1.3.0-devel bash
+cd tf
 git clone https://github.com/esmanchik/tensorflow.git
 git clone https://github.com/esmanchik/models.git
+cd models
+git checkout object_detection
 ```
 
 <div align="center">
