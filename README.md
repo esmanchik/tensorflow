@@ -1,3 +1,13 @@
+## Purpose
+This fork is for my personal projects with **TensorFlow**
+
+## Launch
+```
+sudo docker run -v `pwd`:/root/tf -it gcr.io/tensorflow/tensorflow:1.3.0-devel bash
+git clone https://github.com/esmanchik/tensorflow.git
+git clone https://github.com/esmanchik/models.git
+```
+
 <div align="center">
   <img src="https://www.tensorflow.org/images/tf_logo_transp.png"><br><br>
 </div>
