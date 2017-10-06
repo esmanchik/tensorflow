@@ -11,6 +11,9 @@ cd models
 git checkout object_detection
 ```
 
+Use [LabelImg](https://github.com/tzutalin/labelImg) [v1.4.0](https://www.dropbox.com/s/u2w40r3ye13us20/linux_v1.4.0.zip?dl=1) to label images
+
+
 <div align="center">
   <img src="https://www.tensorflow.org/images/tf_logo_transp.png"><br><br>
 </div>
