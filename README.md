@@ -13,6 +13,34 @@ git checkout object_detection
 
 Use [LabelImg](https://github.com/tzutalin/labelImg) [v1.4.0](https://www.dropbox.com/s/u2w40r3ye13us20/linux_v1.4.0.zip?dl=1) to label images
 
+Assuming that images in xml files are in tf/train folder
+```
+cd
+cd tf/train
+mkdir -p annotations/xmls
+mv *.xml annotations/xmls
+# create image list
+ls annotations/xmls/ | sed 's/.xml//' | tee annotations/trainval.txt
+# create label map
+rm pet_label_map.pbtxt
+LABELS=$(cat annotations/xmls/*.xml | grep '<name>' | sed 's|</*name>||g' | sort | uniq | grep -v skip_this_label | grep -v skip_another_label)
+ID=1
+for LABEL in $LABELS; do
+echo "
+item {
+  id: $ID
+  name: '$LABEL'
+}" | tee -a pet_label_map.pbtxt
+ID=$(($ID+1))
+done
+# create TFRecord file
+DATA=`pwd`
+pushd ../models
+export PYTHONPATH=$PYTHONPATH:`pwd`:`pwd`/slim
+python object_detection/create_pet_tf_record.py \
+    --label_map_path=$DATA/pet_label_map.pbtxt --data_dir=$DATA --output_dir=$DATA
+popd
+```
 
 <div align="center">
   <img src="https://www.tensorflow.org/images/tf_logo_transp.png"><br><br>
