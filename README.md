@@ -6,6 +6,9 @@ This fork is for my personal projects with **TensorFlow**
 sudo docker run -v `pwd`:/root/tf -it gcr.io/tensorflow/tensorflow:1.3.0-devel bash
 cd tf
 git clone https://github.com/esmanchik/tensorflow.git
+cd tensorflow
+git checkout object_detection
+cd ..
 git clone https://github.com/esmanchik/models.git
 cd models
 git checkout object_detection
@@ -41,6 +44,22 @@ python object_detection/create_pet_tf_record.py \
     --label_map_path=$DATA/pet_label_map.pbtxt --data_dir=$DATA --output_dir=$DATA
 popd
 ```
+Train and export model
+```
+cd
+cd tf
+TRAIN=`pwd`/train
+pushd models
+export PYTHONPATH=$PYTHONPATH:`pwd`:`pwd`/slim
+time python object_detection/train.py --logtostderr \
+  --pipeline_config_path=$TRAIN/ssd_mobilenet_v1_pets.config --train_dir=$TRAIN
+CKPT=10000
+time python object_detection/export_inference_graph.py \
+  --input_type image_tensor --pipeline_config_path $TRAIN/ssd_mobilenet_v1_pets.config \
+  --trained_checkpoint_prefix $TRAIN/model.ckpt-$CKPT --output_directory $TRAIN/output_inference_graph_$CKPT
+popd
+```
+
 
 <div align="center">
   <img src="https://www.tensorflow.org/images/tf_logo_transp.png"><br><br>
