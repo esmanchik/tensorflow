@@ -59,7 +59,12 @@ time python object_detection/export_inference_graph.py \
   --trained_checkpoint_prefix $TRAIN/model.ckpt-$CKPT --output_directory $TRAIN/output_inference_graph_$CKPT
 popd
 ```
-
+Run Jupiter Notebook server and attach another terminal to it
+```
+sudo docker run -v `pwd`:/root/tf -p 8888:8888 -p 6006:6006 \
+  -it gcr.io/tensorflow/tensorflow:1.3.0-devel ./run_jupiter.sh --allow-root
+sudo docker exec -it `sudo docker ps -q -l` bash
+```
 
 <div align="center">
   <img src="https://www.tensorflow.org/images/tf_logo_transp.png"><br><br>
