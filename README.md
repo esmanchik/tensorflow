@@ -59,6 +59,21 @@ time python object_detection/export_inference_graph.py \
   --trained_checkpoint_prefix $TRAIN/model.ckpt-$CKPT --output_directory $TRAIN/output_inference_graph_$CKPT
 popd
 ```
+Retrain Inception CNN
+```
+cd tf/tensorflow
+./configure
+bazel build tensorflow/examples/image_retraining:retrain
+bazel-bin/tensorflow/examples/image_retraining/retrain --image_dir ~/tf/retrain
+bazel build tensorflow/examples/image_retraining:label_image
+bazel-bin/tensorflow/examples/image_retraining/label_image \
+  --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt \
+  --input_layer=Mul --output_layer=final_result:0 --image=~/tf/sorting/test.jpg
+bazel build tensorflow/python/tools:strip_unused
+bazel-bin/tensorflow/python/tools/strip_unused \
+  --input_graph=/tmp/output_graph.pb --output_graph=/tmp/stripped_output_graph.pb \
+  --input_node_names="Mul" --output_node_names="final_result" --input_binary=true
+```
 Run Jupiter Notebook server and attach another terminal to it
 ```
 sudo docker run -v `pwd`:/root/tf -p 8888:8888 -p 6006:6006 \
