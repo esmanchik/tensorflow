@@ -66,10 +66,6 @@ cd tf/tensorflow
 bazel build tensorflow/examples/image_retraining:retrain
 bazel-bin/tensorflow/examples/image_retraining/retrain \
   --image_dir ~/tf/retrain --architecture mobilenet_1.0_224 --validation_percentage 20
-bazel build tensorflow/examples/image_retraining:label_image
-bazel-bin/tensorflow/examples/image_retraining/label_image \
-  --graph=/tmp/output_graph.pb --labels=/tmp/output_labels.txt \
-  --input_layer=input --output_layer=final_result:0 --image=~/tf/sorting/test.jpg
 bazel build tensorflow/python/tools:strip_unused
 bazel-bin/tensorflow/python/tools/strip_unused \
   --input_graph=/tmp/output_graph.pb --output_graph=/tmp/stripped_output_graph.pb \
