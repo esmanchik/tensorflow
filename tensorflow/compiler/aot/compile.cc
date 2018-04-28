@@ -32,6 +32,7 @@ limitations under the License.
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/io/path.h"
+#include "tensorflow/core/lib/strings/proto_serialization.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/types.h"
@@ -87,21 +88,23 @@ Status CompileGraph(const GraphDef& graph_def, const tf2xla::Config& config,
   // Converts the graph into an XLA computation, and compiles the
   // computation.
   // TODO(toddw): Should we let the user pick the XLA cpu vs. gpu client?
-  namespace gpu = perftools::gputools;
-  gpu::Platform* cpu_platform =
-      gpu::MultiPlatformManager::PlatformWithName("Host").ValueOrDie();
+  se::Platform* cpu_platform =
+      se::MultiPlatformManager::PlatformWithName("Host").ValueOrDie();
   xla::CompileOnlyClient* client =
       xla::ClientLibrary::GetOrCreateCompileOnlyClient(cpu_platform)
           .ValueOrDie();
   xla::Computation computation;
-  TF_RETURN_IF_ERROR(ConvertGraphDefToXla(graph_def, config, client,
-                                          &computation,
-                                          &compile_result->has_context_arg));
-  if (!flags.debug_dir.empty()) {
+  TF_RETURN_IF_ERROR(
+      ConvertGraphDefToXla(graph_def, config, client, &computation));
+  if (!flags.out_session_module.empty()) {
     TF_ASSIGN_OR_RETURN(std::unique_ptr<xla::SessionModule> module,
                         computation.Snapshot());
-    string file = io::JoinPath(flags.debug_dir, "tfcompile_xla_module.pb");
-    TF_RETURN_IF_ERROR(WriteBinaryProto(Env::Default(), file, *module));
+    // Serialize the SessionModule deterministically so that all the outputs of
+    // a tf_library genrule are deterministic.
+    string proto;
+    TF_RET_CHECK(SerializeToStringDeterministic(*module, &proto));
+    TF_RETURN_IF_ERROR(
+        WriteStringToFile(Env::Default(), flags.out_session_module, proto));
   }
   xla::cpu::CpuAotCompilationOptions aot_opts(
       flags.target_triple, flags.target_cpu, flags.target_features,

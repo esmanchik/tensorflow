@@ -26,6 +26,7 @@ limitations under the License.
 #include "tensorflow/core/kernels/ops_testutil.h"
 #include "tensorflow/core/kernels/ops_util.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
+#include "tensorflow/core/lib/strings/str_util.h"
 #include "tensorflow/core/platform/test.h"
 
 namespace tensorflow {
@@ -61,8 +62,12 @@ class CropAndResizeOpTest : public OpsTestBase {
 
 REGISTER_TEST(float)
 REGISTER_TEST(double)
-REGISTER_TEST(int8)
 REGISTER_TEST(uint8)
+REGISTER_TEST(uint16)
+REGISTER_TEST(int8)
+REGISTER_TEST(int16)
+REGISTER_TEST(int32)
+REGISTER_TEST(int64)
 
 #undef REGISTER_TEST
 
@@ -238,7 +243,7 @@ TEST_F(CropAndResizeOpTest, TestInvalidInputShape) {
   AddInputFromArray<int32>(TensorShape({2}), {4, 4});
   Status s = RunOpKernel();
   ASSERT_FALSE(s.ok());
-  EXPECT_TRUE(StringPiece(s.ToString()).contains("input image must be 4-D"))
+  EXPECT_TRUE(str_util::StrContains(s.ToString(), "input image must be 4-D"))
       << s;
 }
 
@@ -251,7 +256,7 @@ TEST_F(CropAndResizeOpTest, TestInvalidBoxIndexShape) {
   Status s = RunOpKernel();
   ASSERT_FALSE(s.ok());
   EXPECT_TRUE(
-      StringPiece(s.ToString()).contains("box_index has incompatible shape"))
+      str_util::StrContains(s.ToString(), "box_index has incompatible shape"))
       << s;
 }
 
@@ -263,8 +268,8 @@ TEST_F(CropAndResizeOpTest, TestInvalidBoxIndex) {
   AddInputFromArray<int32>(TensorShape({2}), {3, 3});
   Status s = RunOpKernel();
   ASSERT_FALSE(s.ok());
-  EXPECT_TRUE(StringPiece(s.ToString())
-                  .contains("box_index has values outside [0, batch_size)"))
+  EXPECT_TRUE(str_util::StrContains(
+      s.ToString(), "box_index has values outside [0, batch_size)"))
       << s;
 }
 

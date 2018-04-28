@@ -20,7 +20,6 @@ limitations under the License.
 #include <string>
 #include <vector>
 #include "tensorflow/core/lib/core/stringpiece.h"
-#include "tensorflow/core/lib/gtl/array_slice.h"
 #include "tensorflow/core/lib/strings/strcat.h"
 #include "tensorflow/core/platform/types.h"
 
@@ -83,7 +82,7 @@ string Uppercase(StringPiece s);
 
 // Converts "^2ILoveYou!" to "i_love_you_". More specifically:
 // - converts all non-alphanumeric characters to underscores
-// - replaces each occurence of a capital letter (except the very
+// - replaces each occurrence of a capital letter (except the very
 //   first character and if there is already an '_' before it) with '_'
 //   followed by this letter in lower case
 // - Skips leading non-alpha characters
@@ -140,6 +139,21 @@ bool SplitAndParseAsInts(StringPiece text, char delim,
                          std::vector<int64>* result);
 bool SplitAndParseAsFloats(StringPiece text, char delim,
                            std::vector<float>* result);
+
+// StartsWith()
+//
+// Returns whether a given string `text` begins with `prefix`.
+bool StartsWith(StringPiece text, StringPiece prefix);
+
+// EndsWith()
+//
+// Returns whether a given string `text` ends with `suffix`.
+bool EndsWith(StringPiece text, StringPiece suffix);
+
+// StrContains()
+//
+// Returns whether a given string `haystack` contains the substring `needle`.
+bool StrContains(StringPiece haystack, StringPiece needle);
 
 // ------------------------------------------------------------------
 // Implementation details below
@@ -208,6 +222,11 @@ template <typename Predicate>
 std::vector<string> Split(StringPiece text, char delims, Predicate p) {
   return Split(text, StringPiece(&delims, 1), p);
 }
+
+// Returns the length of the given null-terminated byte string 'str'.
+// Returns 'string_max_len' if the null character was not found in the first
+// 'string_max_len' bytes of 'str'.
+size_t Strnlen(const char* str, const size_t string_max_len);
 
 }  // namespace str_util
 }  // namespace tensorflow

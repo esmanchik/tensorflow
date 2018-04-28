@@ -26,7 +26,7 @@ import os
 import re
 import sys
 
-import codegen
+import astor
 import six
 
 from google.protobuf.message import Message as ProtoMessage
@@ -34,7 +34,11 @@ from tensorflow.python.util import tf_inspect
 
 
 # A regular expression capturing a python identifier.
-IDENTIFIER_RE = '[a-zA-Z_][a-zA-Z0-9_]*'
+IDENTIFIER_RE = r'[a-zA-Z_]\w*'
+
+
+class TFDocsError(Exception):
+  pass
 
 
 class _Errors(object):
@@ -107,23 +111,42 @@ def _get_raw_docstring(py_object):
 
 
 # A regular expression for capturing a @{symbol} reference.
-SYMBOL_REFERENCE_RE = re.compile(r'@\{([^}]+)\}')
+SYMBOL_REFERENCE_RE = re.compile(
+    r"""
+    # Start with a literal "@{".
+    @\{
+      # Group at least 1 symbol, not "}".
+      ([^}]+)
+    # Followed by a closing "}"
+    \}
+    """,
+    flags=re.VERBOSE)
+
+AUTO_REFERENCE_RE = re.compile(r'`([a-zA-Z0-9_.]+?)`')
 
 
 class ReferenceResolver(object):
   """Class for replacing @{...} references with Markdown links.
 
-  Args:
-    duplicate_of: A map from duplicate names to preferred names of API
-      symbols.
-    doc_index: A `dict` mapping symbol name strings to objects with `url`
-      and `title` fields. Used to resolve @{$doc} references in docstrings.
-    index: A map from all full names to python objects.
-    py_module_names: A list of string names of Python modules.
+  Attributes:
+    current_doc_full_name: A string (or None) indicating the name of the
+      document currently being processed, so errors can reference the broken
+      doc.
   """
 
   def __init__(self, duplicate_of, doc_index, is_class, is_module,
                py_module_names):
+    """Initializes a Reference Resolver.
+
+    Args:
+      duplicate_of: A map from duplicate names to preferred names of API
+        symbols.
+      doc_index: A `dict` mapping symbol name strings to objects with `url`
+        and `title` fields. Used to resolve @{$doc} references in docstrings.
+      is_class: A map from full names to bool for each symbol.
+      is_module: A map from full names to bool for each symbol.
+      py_module_names: A list of string names of Python modules.
+    """
     self._duplicate_of = duplicate_of
     self._doc_index = doc_index
     self._is_class = is_class
@@ -223,10 +246,25 @@ class ReferenceResolver(object):
     Returns:
       `string`, with "@{symbol}" references replaced by Markdown links.
     """
-    def one_ref(match):
-      return self._one_ref(match, relative_path_to_root)
 
-    return re.sub(SYMBOL_REFERENCE_RE, one_ref, string)
+    def strict_one_ref(match):
+      try:
+        return self._one_ref(match, relative_path_to_root)
+      except TFDocsError as e:
+        self.add_error(e.message)
+        return 'BAD_LINK'
+
+    string = re.sub(SYMBOL_REFERENCE_RE, strict_one_ref, string)
+
+    def sloppy_one_ref(match):
+      try:
+        return self._one_ref(match, relative_path_to_root)
+      except TFDocsError:
+        return match.group(0)
+
+    string = re.sub(AUTO_REFERENCE_RE, sloppy_one_ref, string)
+
+    return string
 
   def python_link(self, link_text, ref_full_name, relative_path_to_root,
                   code_ref=True):
@@ -249,11 +287,19 @@ class ReferenceResolver(object):
     Returns:
       A markdown link to the documentation page of `ref_full_name`.
     """
-    link = self.reference_to_url(ref_full_name, relative_path_to_root)
+    url = self.reference_to_url(ref_full_name, relative_path_to_root)
+
     if code_ref:
-      return '[`%s`](%s)' % (link_text, link)
+      link_text = link_text.join(['<code>', '</code>'])
     else:
-      return '[%s](%s)' % (link_text, link)
+      link_text = self._link_text_to_html(link_text)
+
+    return '<a href="{}">{}</a>'.format(url, link_text)
+
+  @staticmethod
+  def _link_text_to_html(link_text):
+    code_re = '`(.*?)`'
+    return re.sub(code_re, r'<code>\1</code>', link_text)
 
   def py_master_name(self, full_name):
     """Return the master name for a Python symbol name."""
@@ -282,14 +328,14 @@ class ReferenceResolver(object):
 
     Raises:
       RuntimeError: If `ref_full_name` is not documented.
+      TFDocsError: If the @{} syntax cannot be decoded.
     """
     master_name = self._duplicate_of.get(ref_full_name, ref_full_name)
 
     # Check whether this link exists
     if master_name not in self._all_names:
-      message = 'Cannot make link to "%s": Not in index.' % master_name
-      self.add_error(message)
-      return 'BROKEN_LINK'
+      raise TFDocsError(
+          'Cannot make link to "%s": Not in index.' % master_name)
 
     # If this is a member of a class, link to the class page with an anchor.
     ref_path = None
@@ -322,13 +368,13 @@ class ReferenceResolver(object):
 
     # Handle different types of references.
     if string.startswith('$'):  # Doc reference
-      return self._doc_link(
-          string, link_text, manual_link_text, relative_path_to_root)
+      return self._doc_link(string, link_text, manual_link_text,
+                            relative_path_to_root)
 
     elif string.startswith('tensorflow::'):
       # C++ symbol
-      return self._cc_link(
-          string, link_text, manual_link_text, relative_path_to_root)
+      return self._cc_link(string, link_text, manual_link_text,
+                           relative_path_to_root)
 
     else:
       is_python = False
@@ -337,12 +383,15 @@ class ReferenceResolver(object):
           is_python = True
           break
       if is_python:  # Python symbol
-        return self.python_link(link_text, string, relative_path_to_root,
-                                code_ref=not manual_link_text)
+        return self.python_link(
+            link_text,
+            string,
+            relative_path_to_root,
+            code_ref=not manual_link_text)
 
     # Error!
-    self.add_error('Did not understand "%s"' % match.group(0))
-    return 'BROKEN_LINK'
+    raise TFDocsError('Did not understand "%s"' % match.group(0),
+                      'BROKEN_LINK')
 
   def _doc_link(self, string, link_text, manual_link_text,
                 relative_path_to_root):
@@ -361,15 +410,16 @@ class ReferenceResolver(object):
       if not manual_link_text: link_text = self._doc_index[string].title
       url = os.path.normpath(os.path.join(
           relative_path_to_root, '../..', self._doc_index[string].url))
-      return '[%s](%s%s)' % (link_text, url, hash_tag)
+      link_text = self._link_text_to_html(link_text)
+      return '<a href="{}{}">{}</a>'.format(url, hash_tag, link_text)
+
     return self._doc_missing(string, hash_tag, link_text, manual_link_text,
                              relative_path_to_root)
 
-  def _doc_missing(self, string, unused_hash_tag, link_text,
+  def _doc_missing(self, string, unused_hash_tag, unused_link_text,
                    unused_manual_link_text, unused_relative_path_to_root):
     """Generate an error for unrecognized @{$...} references."""
-    self.add_error('Unknown Document "%s"' % string)
-    return link_text
+    raise TFDocsError('Unknown Document "%s"' % string)
 
   def _cc_link(self, string, link_text, unused_manual_link_text,
                relative_path_to_root):
@@ -386,13 +436,15 @@ class ReferenceResolver(object):
     elif string == 'tensorflow::ops::Const':
       ret = 'namespace/tensorflow/ops.md#const'
     else:
-      self.add_error('C++ reference not understood: "%s"' % string)
-      return 'TODO_C++:%s' % string
+      raise TFDocsError('C++ reference not understood: "%s"' % string)
+
     # relative_path_to_root gets you to api_docs/python, we go from there
     # to api_docs/cc, and then add ret.
     cc_relative_path = os.path.normpath(os.path.join(
         relative_path_to_root, '../cc', ret))
-    return '[`%s`](%s)' % (link_text, cc_relative_path)
+
+    return '<a href="{}"><code>{}</code></a>'.format(cc_relative_path,
+                                                     link_text)
 
 
 # TODO(aselle): Collect these into a big list for all modules and functions
@@ -569,20 +621,20 @@ def _parse_md_docstring(py_object, relative_path_to_root, reference_resolver):
 def _get_arg_spec(func):
   """Extracts signature information from a function or functools.partial object.
 
-  For functions, uses `tf_inspect.getargspec`. For `functools.partial` objects,
-  corrects the signature of the underlying function to take into account the
-  removed arguments.
+  For functions, uses `tf_inspect.getfullargspec`. For `functools.partial`
+  objects, corrects the signature of the underlying function to take into
+  account the removed arguments.
 
   Args:
     func: A function whose signature to extract.
 
   Returns:
-    An `ArgSpec` namedtuple `(args, varargs, keywords, defaults)`, as returned
-    by `tf_inspect.getargspec`.
+    An `FullArgSpec` namedtuple `(args, varargs, varkw, defaults, etc.)`,
+    as returned by `tf_inspect.getfullargspec`.
   """
-  # getargspec does not work for functools.partial objects directly.
+  # getfullargspec does not work for functools.partial objects directly.
   if isinstance(func, functools.partial):
-    argspec = tf_inspect.getargspec(func.func)
+    argspec = tf_inspect.getfullargspec(func.func)
     # Remove the args from the original function that have been used up.
     first_default_arg = (
         len(argspec.args or []) - len(argspec.defaults or []))
@@ -605,12 +657,16 @@ def _get_arg_spec(func):
           argspec_defaults.pop(i-first_default_arg)
         else:
           first_default_arg -= 1
-    return tf_inspect.ArgSpec(args=argspec_args,
-                              varargs=argspec.varargs,
-                              keywords=argspec.keywords,
-                              defaults=tuple(argspec_defaults))
+    return tf_inspect.FullArgSpec(
+        args=argspec_args,
+        varargs=argspec.varargs,
+        varkw=argspec.varkw,
+        defaults=tuple(argspec_defaults),
+        kwonlyargs=[],
+        kwonlydefaults=None,
+        annotations={})
   else:  # Regular function or method, getargspec will work fine.
-    return tf_inspect.getargspec(func)
+    return tf_inspect.getfullargspec(func)
 
 
 def _remove_first_line_indent(string):
@@ -618,11 +674,14 @@ def _remove_first_line_indent(string):
   return '\n'.join([line[indent:] for line in string.split('\n')])
 
 
+PAREN_NUMBER_RE = re.compile(r'^\(([0-9.e-]+)\)')
+
+
 def _generate_signature(func, reverse_index):
   """Given a function, returns a list of strings representing its args.
 
   This function produces a list of strings representing the arguments to a
-  python function. It uses tf_inspect.getargspec, which
+  python function. It uses tf_inspect.getfullargspec, which
   does not generalize well to Python 3.x, which is more flexible in how *args
   and **kwargs are handled. This is not a problem in TF, since we have to remain
   compatible to Python 2.7 anyway.
@@ -673,7 +732,11 @@ def _generate_signature(func, reverse_index):
       if id(default) in reverse_index:
         default_text = reverse_index[id(default)]
       elif ast_default is not None:
-        default_text = codegen.to_source(ast_default)
+        default_text = (
+            astor.to_source(ast_default).rstrip('\n').replace('\t', '\\t')
+            .replace('\n', '\\n').replace('"""', "'"))
+        default_text = PAREN_NUMBER_RE.sub('\\1', default_text)
+
         if default_text != repr(default):
           # This may be an internal name. If so, handle the ones we know about.
           # TODO(wicke): This should be replaced with a lookup in the index.
@@ -706,8 +769,8 @@ def _generate_signature(func, reverse_index):
   # Add *args and *kwargs.
   if argspec.varargs:
     args_list.append('*' + argspec.varargs)
-  if argspec.keywords:
-    args_list.append('**' + argspec.keywords)
+  if argspec.varkw:
+    args_list.append('**' + argspec.varkw)
 
   return args_list
 
@@ -1084,9 +1147,11 @@ class _ClassPageInfo(object):
 
     for short_name in parser_config.tree[self.full_name]:
       # Remove builtin members that we never want to document.
-      if short_name in ['__class__', '__base__', '__weakref__', '__doc__',
-                        '__module__', '__dict__', '__abstractmethods__',
-                        '__slots__', '__getnewargs__']:
+      if short_name in [
+          '__class__', '__base__', '__weakref__', '__doc__', '__module__',
+          '__dict__', '__abstractmethods__', '__slots__', '__getnewargs__',
+          '__str__', '__repr__', '__hash__'
+      ]:
         continue
 
       child_name = '.'.join([self.full_name, short_name])
@@ -1131,7 +1196,8 @@ class _ClassPageInfo(object):
         # obvious what they do, don't include them in the docs if there's no
         # docstring.
         if not child_doc.brief.strip() and short_name in [
-            '__str__', '__repr__', '__hash__', '__del__', '__copy__']:
+            '__del__', '__copy__'
+        ]:
           print('Skipping %s, defined in %s, no docstring.' % (child_name,
                                                                defining_class))
           continue

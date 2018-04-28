@@ -25,8 +25,10 @@ from tensorflow.contrib.quantize.python.quantize_graph import *
 from tensorflow.python.util.all_util import remove_undocumented
 
 _allowed_symbols = [
-    "create_eval_graph,"
+    "create_eval_graph",
     "create_training_graph",
+    "experimental_create_eval_graph",
+    "experimental_create_training_graph",
 ]
 
 remove_undocumented(__name__, _allowed_symbols)
